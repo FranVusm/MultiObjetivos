@@ -32,6 +32,7 @@ algoritmo/
 |   `-- reporting.py
 |-- tests/
 |-- pytest.ini
+|-- requirements.txt
 `-- README.md
 ```
 
@@ -43,7 +44,7 @@ reportes generados.
 Usar Python 3.11 o superior. Instalar dependencias:
 
 ```bash
-pip install matplotlib pytest
+pip install -r requirements.txt
 ```
 
 `matplotlib` es necesario para generar graficos. `pytest` solo es necesario si se
@@ -76,6 +77,16 @@ python src/main.py --data Modelo_grande.dat
 python src/main.py --data modelo_intermedio.dat
 python src/main.py --data Modelo.dat
 ```
+
+Tambien se puede ejecutar desde `src/` usando el wrapper `main`:
+
+```powershell
+cd src
+python main ..\data\modelo_intermedio.dat
+```
+
+Ese comando delega internamente en `main.py`. Se puede usar una ruta relativa o
+absoluta para el `.dat`.
 
 ## Datos de entrada
 
