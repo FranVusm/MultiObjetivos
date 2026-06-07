@@ -420,11 +420,13 @@ def write_sigma_pareto_solutions_txt(
     sigma_timings: List[dict] | None = None,
     total_elapsed_seconds: float | None = None,
     objective_normalization: dict | None = None,
+    filename: str = "sigma_pareto_solutions.txt",
+    title: str = "TD-MT-GVRP Sigma Sweep Pareto Solutions",
 ) -> str:
     """Write the global non-dominated solutions found across all sigma runs."""
 
     ensure_dir(output_dir)
-    output_path = Path(output_dir) / "sigma_pareto_solutions.txt"
+    output_path = Path(output_dir) / filename
     feasible_candidates = [
         candidate for candidate in sigma_candidates if candidate["individual"].feasible
     ]
@@ -432,7 +434,7 @@ def write_sigma_pareto_solutions_txt(
     pareto_candidates = _nondominated_sigma_candidates(unique_candidates)
 
     lines = [
-        "TD-MT-GVRP Sigma Sweep Pareto Solutions",
+        title,
         "",
         "Aggregate summary",
         f"Stored candidate solutions: {len(sigma_candidates)}",
@@ -818,9 +820,12 @@ def _sigma_solution_section(title: str, candidate: dict, data) -> List[str]:
 
 
 def _format_sigma_source(candidate: dict) -> str:
+    seed = candidate.get("seed")
     sigma = candidate.get("sigma")
     weights = candidate.get("weights")
     label = "pareto" if sigma is None else f"sigma_{sigma}"
+    if seed not in (None, ""):
+        label = f"seed_{int(seed):02d}/{label}"
     return f"{label}, weights={weights}"
 
 

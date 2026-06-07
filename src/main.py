@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
-    run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    run_name = _build_run_name(data_path)
     output_root = project_root / "results" / run_name
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -46,64 +47,49 @@ def main(argv: list[str] | None = None) -> None:
     if not rows:
         rows = [(None, None)]
 
-    summary_rows = []
-    sigma_solution_candidates = []
     sweep_start = perf_counter()
-    objective_normalization = _estimate_objective_normalization(data, output_root)
-    for sigma_index, weights in rows:
-        sigma_start = perf_counter()
-        label = f"sigma_{sigma_index:02d}" if sigma_index is not None else "pareto"
-        print(f"\nRunning {label} with weights={weights}")
+    objective_normalization = _estimate_objective_normalization(data, output_root, args.base_seed)
 
-        output_dir = output_root / label
-        output_dir.mkdir(parents=True, exist_ok=True)
-        config = _make_config(data, sigma_index, weights, objective_normalization)
-        config.progress_log_path = str(output_dir / "execution.log")
-        population, pareto_front, history = run_nsga2(data, config)
-        selected = _select_sigma_solution(pareto_front, weights, objective_normalization)
-        report_paths = generate_run_report(
-            output_dir=str(output_dir),
+    if args.seeds == 1:
+        summary_rows, sigma_solution_candidates = _run_sigma_sweep(
             data=data,
-            config=config,
-            population=population,
-            pareto_front=pareto_front,
-            history=history,
+            output_root=output_root,
+            rows=rows,
+            objective_normalization=objective_normalization,
+            base_seed=args.base_seed,
         )
-
-        unique_front = unique_by_objectives(pareto_front)
-        unique_count = len(unique_front)
-        sigma_solution_candidates.extend(
-            {
-                "sigma": sigma_index,
-                "weights": weights,
-                "individual": ind,
-            }
-            for ind in unique_front
-        )
-        feasible_count = sum(1 for ind in population if ind.feasible)
-        sigma_elapsed_seconds = perf_counter() - sigma_start
-        summary_rows.append(
-            {
-                "sigma": sigma_index,
-                "beta_f1": "" if weights is None else weights[0],
-                "beta_f2": "" if weights is None else weights[1],
-                "selected_f1": selected.objectives[0] if selected else "",
-                "selected_f2": selected.objectives[1] if selected else "",
-                "feasible_count": feasible_count,
-                "unique_points": unique_count,
-                "nsga2_elapsed_seconds": config.runtime_stats.get("elapsed_seconds", 0.0),
-                "sigma_elapsed_seconds": sigma_elapsed_seconds,
-                "label": label,
-                "summary": report_paths["summary"],
-            }
-        )
-        if selected is not None:
-            print(
-                f"{label}: selected F1={selected.objectives[0]} "
-                f"F2={selected.objectives[1]} feasible={selected.feasible} "
-                f"front_unique={unique_count} feasible_count={feasible_count} "
-                f"elapsed_seconds={sigma_elapsed_seconds:.3f}"
+    else:
+        summary_rows = []
+        sigma_solution_candidates = []
+        for seed_index in range(1, args.seeds + 1):
+            seed_output_root = output_root / f"seed_{seed_index:02d}"
+            seed_base = args.base_seed + ((seed_index - 1) * 1000)
+            print(f"\n=== Running seed_{seed_index:02d} with base seed {seed_base} ===")
+            seed_rows, seed_candidates = _run_sigma_sweep(
+                data=data,
+                output_root=seed_output_root,
+                rows=rows,
+                objective_normalization=objective_normalization,
+                base_seed=seed_base,
+                seed_index=seed_index,
             )
+            seed_elapsed_seconds = sum(row["sigma_elapsed_seconds"] for row in seed_rows)
+            _write_sigma_summary(seed_output_root, seed_rows, seed_elapsed_seconds)
+            write_sigma_pareto_solutions_txt(
+                output_dir=str(seed_output_root),
+                data=data,
+                sigma_candidates=seed_candidates,
+                sigma_timings=seed_rows,
+                total_elapsed_seconds=seed_elapsed_seconds,
+                objective_normalization=objective_normalization,
+            )
+            plot_sigma_pareto_points(
+                output_dir=str(seed_output_root),
+                data=data,
+                sigma_candidates=seed_candidates,
+            )
+            summary_rows.extend(seed_rows)
+            sigma_solution_candidates.extend(seed_candidates)
 
     total_elapsed_seconds = perf_counter() - sweep_start
     summary_path = _write_sigma_summary(output_root, summary_rows, total_elapsed_seconds)
@@ -114,6 +100,12 @@ def main(argv: list[str] | None = None) -> None:
         sigma_timings=summary_rows,
         total_elapsed_seconds=total_elapsed_seconds,
         objective_normalization=objective_normalization,
+        filename="aggregate_pareto_solutions.txt" if args.seeds > 1 else "sigma_pareto_solutions.txt",
+        title=(
+            "TD-MT-GVRP Multi-Seed Aggregate Pareto Solutions"
+            if args.seeds > 1
+            else "TD-MT-GVRP Sigma Sweep Pareto Solutions"
+        ),
     )
     sigma_plot_path = plot_sigma_pareto_points(
         output_dir=str(output_root),
@@ -145,9 +137,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Alternative way to pass the AMPL .dat file path.",
     )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=1,
+        help="Number of independent seed sweeps to run. Use --seeds 10 for the delivery aggregate front.",
+    )
+    parser.add_argument(
+        "--base-seed",
+        type=int,
+        default=12,
+        help="Base random seed. Multi-seed runs use base_seed + 1000 * seed_index.",
+    )
     args = parser.parse_args(argv)
     if args.dat_file and args.data_option:
         parser.error("Use either the positional dat_file argument or --data, not both.")
+    if args.seeds < 1:
+        parser.error("--seeds must be greater than or equal to 1.")
     args.dat_file = args.data_option or args.dat_file or DEFAULT_DAT_PATH
     return args
 
@@ -170,14 +176,101 @@ def _resolve_dat_path(dat_file: str, project_root: Path) -> Path:
     return project_candidate
 
 
+def _build_run_name(data_path: Path) -> str:
+    model_name = _safe_path_name(data_path.stem)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"run_{model_name}_{timestamp}"
+
+
+def _safe_path_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    safe = safe.strip("._-")
+    return safe or "modelo"
+
+
+def _run_sigma_sweep(
+    data,
+    output_root: Path,
+    rows: list[tuple[int | None, tuple[float, float] | None]],
+    objective_normalization: dict,
+    base_seed: int,
+    seed_index: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    summary_rows = []
+    sigma_solution_candidates = []
+
+    for sigma_index, weights in rows:
+        sigma_start = perf_counter()
+        label = f"sigma_{sigma_index:02d}" if sigma_index is not None else "pareto"
+        prefix = f"seed_{seed_index:02d} / " if seed_index is not None else ""
+        print(f"\nRunning {prefix}{label} with weights={weights}")
+
+        output_dir = output_root / label
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config = _make_config(data, sigma_index, weights, objective_normalization, base_seed)
+        config.progress_log_path = str(output_dir / "execution.log")
+        population, pareto_front, history = run_nsga2(data, config)
+        selected = _select_sigma_solution(pareto_front, weights, objective_normalization)
+        report_paths = generate_run_report(
+            output_dir=str(output_dir),
+            data=data,
+            config=config,
+            population=population,
+            pareto_front=pareto_front,
+            history=history,
+        )
+
+        unique_front = unique_by_objectives(pareto_front)
+        unique_count = len(unique_front)
+        sigma_solution_candidates.extend(
+            {
+                "seed": seed_index,
+                "base_seed": base_seed,
+                "sigma": sigma_index,
+                "weights": weights,
+                "individual": ind,
+            }
+            for ind in unique_front
+        )
+        feasible_count = sum(1 for ind in population if ind.feasible)
+        sigma_elapsed_seconds = perf_counter() - sigma_start
+        summary_rows.append(
+            {
+                "seed": "" if seed_index is None else seed_index,
+                "base_seed": base_seed,
+                "sigma": sigma_index,
+                "beta_f1": "" if weights is None else weights[0],
+                "beta_f2": "" if weights is None else weights[1],
+                "selected_f1": selected.objectives[0] if selected else "",
+                "selected_f2": selected.objectives[1] if selected else "",
+                "feasible_count": feasible_count,
+                "unique_points": unique_count,
+                "nsga2_elapsed_seconds": config.runtime_stats.get("elapsed_seconds", 0.0),
+                "sigma_elapsed_seconds": sigma_elapsed_seconds,
+                "label": label,
+                "summary": report_paths["summary"],
+            }
+        )
+        if selected is not None:
+            print(
+                f"{prefix}{label}: selected F1={selected.objectives[0]} "
+                f"F2={selected.objectives[1]} feasible={selected.feasible} "
+                f"front_unique={unique_count} feasible_count={feasible_count} "
+                f"elapsed_seconds={sigma_elapsed_seconds:.3f}"
+            )
+
+    return summary_rows, sigma_solution_candidates
+
+
 def _make_config(
     data,
     sigma_index: int | None,
     weights: tuple[float, float] | None,
     objective_normalization: dict | None = None,
+    base_seed: int = 12,
 ) -> NSGA2Config:
     planning_end = max(data.LS.values())
-    seed = 12 if sigma_index is None else 12 + sigma_index
+    seed = base_seed if sigma_index is None else base_seed + sigma_index
     initial_departure_max = min(6.0, planning_end)
     max_wait_between_trips = min(0.5, planning_end)
     return NSGA2Config(
@@ -214,7 +307,7 @@ def _make_config(
     )
 
 
-def _estimate_objective_normalization(data, output_root: Path) -> dict:
+def _estimate_objective_normalization(data, output_root: Path, base_seed: int) -> dict:
     probes = [
         ("normalization_f1", "min_f1", (1.0, 0.0), -101),
         ("normalization_f2", "min_f2", (0.0, 1.0), -102),
@@ -225,7 +318,7 @@ def _estimate_objective_normalization(data, output_root: Path) -> dict:
         print(f"\nRunning {label} with weights={weights}")
         output_dir = output_root / label
         output_dir.mkdir(parents=True, exist_ok=True)
-        config = _make_config(data, sigma_index, weights)
+        config = _make_config(data, sigma_index, weights, base_seed=base_seed)
         config.progress_log_path = str(output_dir / "execution.log")
         population, pareto_front, history = run_nsga2(data, config)
         report_paths = generate_run_report(
@@ -344,7 +437,7 @@ def _select_sigma_solution(
 def _write_sigma_summary(output_root: Path, rows: list[dict], total_elapsed_seconds: float) -> str:
     output_path = output_root / "sigma_sweep_summary.csv"
     header = (
-        "sigma,beta_f1,beta_f2,selected_f1,selected_f2,"
+        "seed,base_seed,sigma,beta_f1,beta_f2,selected_f1,selected_f2,"
         "feasible_count,unique_points,nsga2_elapsed_seconds,"
         "sigma_elapsed_seconds,total_elapsed_seconds,summary"
     )
@@ -354,6 +447,8 @@ def _write_sigma_summary(output_root: Path, rows: list[dict], total_elapsed_seco
             ",".join(
                 str(row.get(key, ""))
                 for key in (
+                    "seed",
+                    "base_seed",
                     "sigma",
                     "beta_f1",
                     "beta_f2",
@@ -373,6 +468,8 @@ def _write_sigma_summary(output_root: Path, rows: list[dict], total_elapsed_seco
             str(value)
             for value in (
                 "TOTAL",
+                "",
+                "",
                 "",
                 "",
                 "",
