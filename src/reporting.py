@@ -515,7 +515,7 @@ def plot_sigma_pareto_points(
     data,
     sigma_candidates: List[dict],
 ) -> str:
-    """Plot only the global non-dominated Pareto objective points from sigma runs."""
+    """Plot dominated and non-dominated objective points from sigma runs."""
 
     plt = _get_pyplot()
     ensure_dir(output_dir)
@@ -525,19 +525,35 @@ def plot_sigma_pareto_points(
     ]
     unique_candidates = _unique_sigma_candidates(feasible_candidates, data)
     pareto_candidates = _nondominated_sigma_candidates(unique_candidates)
+    pareto_ids = {id(candidate) for candidate in pareto_candidates}
+    dominated_candidates = [
+        candidate for candidate in unique_candidates if id(candidate) not in pareto_ids
+    ]
 
     plt.figure(figsize=(7, 5))
+    if dominated_candidates:
+        plt.scatter(
+            [candidate["individual"].objectives[0] for candidate in dominated_candidates],
+            [candidate["individual"].objectives[1] for candidate in dominated_candidates],
+            color="#549A96",
+            alpha=0.75,
+            s=36,
+            label="Dominated solutions",
+        )
     if pareto_candidates:
         plt.scatter(
             [candidate["individual"].objectives[0] for candidate in pareto_candidates],
             [candidate["individual"].objectives[1] for candidate in pareto_candidates],
             color="#0B6E69",
             s=44,
+            label="Non-dominated solutions",
         )
     plt.xlabel("F1 emissions")
     plt.ylabel("F2 cost")
     plt.title("Sigma Sweep Pareto Points")
     plt.grid(True, alpha=0.3)
+    if dominated_candidates or pareto_candidates:
+        plt.legend()
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
