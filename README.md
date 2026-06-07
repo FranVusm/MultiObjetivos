@@ -36,8 +36,8 @@ algoritmo/
 `-- README.md
 ```
 
-`results/` se deja vacio en Git. Cada ejecucion crea una subcarpeta nueva con los
-reportes generados.
+`results/` se deja vacio en Git. Cada ejecucion crea una subcarpeta nueva con el
+nombre del modelo ejecutado y los reportes generados.
 
 ## Requisitos
 
@@ -87,6 +87,15 @@ python main ..\data\modelo_intermedio.dat
 
 Ese comando delega internamente en `main.py`. Se puede usar una ruta relativa o
 absoluta para el `.dat`.
+
+Para ejecutar la heuristica con 10 semillas independientes y crear el frente
+agregado pedido para la entrega:
+
+```bash
+python src/main.py data/modelo_intermedio.dat --seeds 10
+```
+
+En ese modo se ejecuta el barrido completo de sigmas para cada semilla.
 
 ## Datos de entrada
 
@@ -197,16 +206,18 @@ soluciones ponderadas y compromisos.
 Cada ejecucion crea:
 
 ```text
-results/run_YYYYMMDD_HHMMSS/
+results/run_NOMBRE_MODELO_YYYYMMDD_HHMMSS/
 ```
 
 Dentro de esa carpeta se guardan:
 
 - `objective_normalization.json`;
 - `sigma_sweep_summary.csv`;
-- `sigma_pareto_solutions.txt`;
+- `sigma_pareto_solutions.txt`, si se ejecuta una sola semilla;
+- `aggregate_pareto_solutions.txt`, si se ejecuta con `--seeds`;
 - `sigma_pareto_points.png`;
 - una carpeta por cada sigma;
+- una carpeta `seed_XX` por cada semilla cuando se usa `--seeds`;
 - carpetas `normalization_f1` y `normalization_f2`.
 
 Cada carpeta de corrida contiene:

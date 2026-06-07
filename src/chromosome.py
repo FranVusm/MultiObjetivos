@@ -193,37 +193,26 @@ def random_capacity_feasible_cuts(
     data,
     rng: Union[int, random.Random, None] = None,
 ) -> List[int]:
-    """Create randomized cuts that try to keep every slot within capacity."""
+    """Create randomized cuts that keep every active slot within capacity."""
 
     random_generator = _coerce_rng(rng)
     num_slots = len(get_trip_slots(data))
     if num_slots <= 0:
         raise ValueError("Cannot build cuts without trip slots")
+    if not perm:
+        return [0] * (num_slots + 1)
+
+    groups = _capacity_feasible_group_sizes(perm, data)
+    active_slots = _sample_active_slot_count(perm, data, num_slots, random_generator)
+    groups = _split_groups_for_diversity(groups, active_slots, random_generator)
 
     cuts = [0]
     position = 0
-    for slot_index in range(num_slots):
-        remaining_customers = len(perm) - position
-        remaining_slots = num_slots - slot_index
-        if remaining_customers <= 0:
-            cuts.append(len(perm))
-            continue
-
-        feasible_sizes = _feasible_block_sizes(
-            perm=perm,
-            start=position,
-            remaining_slots=remaining_slots,
-            data=data,
-        )
-        if not feasible_sizes:
-            # If capacity cannot be respected, put the rest in the last available slots.
-            take = max(1, remaining_customers - (remaining_slots - 1))
-        else:
-            take = random_generator.choice(feasible_sizes)
-
-        position = min(len(perm), position + take)
+    for size in groups:
+        position += size
         cuts.append(position)
-
+    while len(cuts) < num_slots + 1:
+        cuts.append(len(perm))
     cuts[-1] = len(perm)
     return cuts[: num_slots + 1]
 
@@ -265,6 +254,77 @@ def _capacity_aware_cuts(perm: List[int], data, num_slots: int) -> List[int]:
     return cuts[: num_slots + 1]
 
 
+def _sample_active_slot_count(
+    perm: List[int],
+    data,
+    num_slots: int,
+    random_generator: random.Random,
+) -> int:
+    min_slots = _minimum_capacity_slots(perm, data)
+    max_slots = min(num_slots, len(perm))
+    if min_slots >= max_slots:
+        return min_slots
+
+    # Keep some compact solutions, but usually spend spare slots to diversify cuts.
+    if random_generator.random() < 0.25:
+        return min_slots
+    return random_generator.randint(min_slots, max_slots)
+
+
+def _minimum_capacity_slots(perm: List[int], data) -> int:
+    return len(_capacity_feasible_group_sizes(perm, data))
+
+
+def _capacity_feasible_group_sizes(perm: List[int], data) -> List[int]:
+    groups = []
+    current_size = 0
+    current_demand = 0.0
+    for customer in perm:
+        demand = data.d[customer]
+        if demand > data.q:
+            return [len(perm)]
+        if current_size > 0 and current_demand + demand > data.q:
+            groups.append(current_size)
+            current_size = 0
+            current_demand = 0.0
+        current_size += 1
+        current_demand += demand
+    if current_size > 0:
+        groups.append(current_size)
+    return groups
+
+
+def _split_groups_for_diversity(
+    groups: List[int],
+    active_slots: int,
+    random_generator: random.Random,
+) -> List[int]:
+    groups = list(groups)
+    while len(groups) < active_slots:
+        splittable = [index for index, size in enumerate(groups) if size > 1]
+        if not splittable:
+            break
+        index = random_generator.choice(splittable)
+        size = groups[index]
+        left = random_generator.randint(1, size - 1)
+        groups[index : index + 1] = [left, size - left]
+    return groups
+
+
+def _minimum_capacity_slots_legacy(perm: List[int], data) -> int:
+    used_slots = 0
+    current_demand = 0.0
+    for customer in perm:
+        demand = data.d[customer]
+        if demand > data.q:
+            return math.inf
+        if current_demand == 0.0 or current_demand + demand > data.q:
+            used_slots += 1
+            current_demand = 0.0
+        current_demand += demand
+    return used_slots
+
+
 def _feasible_block_sizes(
     perm: List[int],
     start: int,
@@ -292,29 +352,33 @@ def _feasible_block_sizes(
                 feasible_sizes.append(take)
             continue
 
-        if _can_pack_remaining(perm[start + take :], slots_left, data):
+        if _can_pack_remaining_exactly(perm, start + take, slots_left, data):
             feasible_sizes.append(take)
 
     return [size for size in feasible_sizes if size >= min_take]
 
 
-def _can_pack_remaining(remaining_perm: List[int], slots_left: int, data) -> bool:
-    if not remaining_perm:
-        return True
+def _can_pack_remaining_exactly(
+    perm: List[int],
+    start: int,
+    slots_left: int,
+    data,
+) -> bool:
+    if start >= len(perm):
+        return slots_left == 0
     if slots_left <= 0:
         return False
+    if len(perm) - start < slots_left:
+        return False
 
-    used_slots = 1
-    current_demand = 0.0
-    for customer in remaining_perm:
-        demand = data.d[customer]
+    demand = 0.0
+    for end in range(start + 1, len(perm) + 1):
+        demand += data.d[perm[end - 1]]
         if demand > data.q:
-            return False
-        if current_demand > 0 and current_demand + demand > data.q:
-            used_slots += 1
-            current_demand = 0.0
-        current_demand += demand
-    return used_slots <= slots_left
+            break
+        if _can_pack_remaining_exactly(perm, end, slots_left - 1, data):
+            return True
+    return False
 
 
 def _random_cuts(
