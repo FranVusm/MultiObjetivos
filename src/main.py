@@ -178,6 +178,8 @@ def _make_config(
 ) -> NSGA2Config:
     planning_end = max(data.LS.values())
     seed = 12 if sigma_index is None else 12 + sigma_index
+    initial_departure_max = min(6.0, planning_end)
+    max_wait_between_trips = min(0.5, planning_end)
     return NSGA2Config(
         population_size=40,
         generations=500,
@@ -185,11 +187,12 @@ def _make_config(
         mutation_probability=0.2,
         seed=seed,
         verbose=False,
-        initial_departure_max=planning_end,
-        max_wait_between_trips=planning_end,
+        initial_departure_max=initial_departure_max,
+        max_wait_between_trips=max_wait_between_trips,
         alpha_mutation_step=1.0,
         feasible_initialization_attempts=50,
-        cut_reset_probability=0.1,
+        cut_reset_probability=0.35,
+        cut_diversity_repair_probability=0.75,
         alpha_boundary_mutation_probability=0.45,
         alpha_random_reset_probability=0.1,
         local_search_method="vnd",

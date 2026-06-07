@@ -123,6 +123,8 @@ def write_run_summary_txt(
         f"Initial departure max: {getattr(config, 'initial_departure_max', None)}",
         f"Max wait between trips: {getattr(config, 'max_wait_between_trips', None)}",
         f"Alpha mutation step: {getattr(config, 'alpha_mutation_step', None)}",
+        f"Cut reset probability: {getattr(config, 'cut_reset_probability', None)}",
+        f"Cut diversity repair probability: {getattr(config, 'cut_diversity_repair_probability', None)}",
         "Alpha boundary mutation probability: "
         f"{getattr(config, 'alpha_boundary_mutation_probability', None)}",
         f"Evaluation cache enabled: {getattr(config, 'evaluation_cache_enabled', None)}",

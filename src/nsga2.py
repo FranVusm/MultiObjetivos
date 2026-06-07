@@ -62,7 +62,8 @@ class NSGA2Config:
     max_wait_between_trips: float = 0.25
     alpha_mutation_step: float = 0.25
     feasible_initialization_attempts: int = 50
-    cut_reset_probability: float = 0.1
+    cut_reset_probability: float = 0.35
+    cut_diversity_repair_probability: float = 0.75
     alpha_boundary_mutation_probability: float = 0.35
     alpha_random_reset_probability: float = 0.1
     local_search_method: str = "vnd"
@@ -323,8 +324,20 @@ def ordered_crossover(
         alpha=child2_alpha,
     )
     return (
-        repair_cuts_capacity_aware(child1, data, rng=rng, randomize=randomize_repair),
-        repair_cuts_capacity_aware(child2, data, rng=rng, randomize=randomize_repair),
+        repair_cuts_capacity_aware(
+            child1,
+            data,
+            rng=rng,
+            randomize=randomize_repair,
+            diversity_probability=config.cut_diversity_repair_probability if config else 0.75,
+        ),
+        repair_cuts_capacity_aware(
+            child2,
+            data,
+            rng=rng,
+            randomize=randomize_repair,
+            diversity_probability=config.cut_diversity_repair_probability if config else 0.75,
+        ),
     )
 
 
@@ -365,7 +378,13 @@ def mutate(
     if rng.random() < config.mutation_probability:
         mutated.alpha = _mutate_alpha(mutated, data, rng, config)
 
-    return repair_cuts_capacity_aware(mutated, data, rng=rng, randomize=reset_cuts)
+    return repair_cuts_capacity_aware(
+        mutated,
+        data,
+        rng=rng,
+        randomize=reset_cuts,
+        diversity_probability=config.cut_diversity_repair_probability,
+    )
 
 
 def _mutate_alpha(
@@ -474,13 +493,23 @@ def repair_cuts_capacity_aware(
     data,
     rng: Optional[random.Random] = None,
     randomize: bool = False,
+    diversity_probability: float = 0.75,
 ) -> Individual:
-    """Repair cut shape and greedily respect capacity when slots allow it."""
+    """Repair cut shape while preserving capacity-feasible cut diversity."""
 
     repaired = clone_individual_fast(ind)
     if randomize:
         repaired.cuts = random_capacity_feasible_cuts(repaired.perm, data, rng)
         return repaired
+
+    repaired.cuts = _normalize_cuts(repaired.cuts, len(repaired.perm))
+    if _cuts_are_valid(repaired, data):
+        return repaired
+
+    if rng is not None:
+        if rng.random() < diversity_probability:
+            repaired.cuts = random_capacity_feasible_cuts(repaired.perm, data, rng)
+            return repaired
 
     num_slots = len(get_trip_slots(data))
     cuts = [0]
@@ -900,6 +929,14 @@ def _normalize_cuts(cuts: List[int], perm_len: int) -> List[int]:
             normalized[index] = normalized[index - 1]
     normalized[-1] = perm_len
     return normalized
+
+
+def _cuts_are_valid(ind: Individual, data) -> bool:
+    try:
+        validate_individual(ind, data, check_capacity=True)
+    except ValueError:
+        return False
+    return True
 
 
 def _ensure_valid_or_repair(ind: Individual, data) -> Individual:
